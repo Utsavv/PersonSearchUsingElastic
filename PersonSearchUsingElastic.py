@@ -3,6 +3,8 @@ import pyodbc
 import random
 import datetime
 from elasticsearch import Elasticsearch, helpers
+import time
+from colorama import Fore, Style
 
 # Define server name as a global variable so it can be set once
 server = 'localhost'
@@ -247,9 +249,6 @@ def index_data_to_elasticsearch(db_name, index_name, batch_size=10000):
         offset += batch_size
         print(f"Indexed {offset}/{total_records} records")
 
-# Example usage: setting up the database and bulk inserting data
-# setup_database_and_bulk_insert_data(db_name, record_count=1000, batch_size=100)
-index_data_to_elasticsearch('PersonSearchDB', 'person_index', batch_size=1000)
 
 '''
 5. Implementing Search Queries
@@ -267,6 +266,8 @@ def ExecuteElasticSearch(search_query):
     print(f"Found {response['hits']['total']['value']} documents:")
     for hit in response['hits']['hits']:
         print(f"\n\n\n{hit['_source']}")
+
+
         
 def first_name_search(column_name, first_name):
     search_query = {
@@ -333,20 +334,88 @@ def boolean_logic_search(first_name, last_name, birth_year):
         }
     }
     ExecuteElasticSearch(search_query)
+
+def compare_performance(first_name, last_name, preferred_name, iterations=1000):
+    # SQL query
+    sql_query = '''
+    SELECT FirstName, LastName, PreferredName
+    FROM Persons
+    WHERE FirstName = ? AND LastName = ? AND PreferredName LIKE ?
+    '''
+
+    # Warm-up run for SQL Server
+    execute_SQL_Query(db_name, sql_query, (first_name, last_name, preferred_name))
+
+    # Record execution times for SQL Server
+    sql_execution_times = []
+    for _ in range(iterations):
+        start_time = time.perf_counter()
+        execute_SQL_Query(db_name, sql_query, (first_name, last_name, preferred_name))
+        end_time = time.perf_counter()
+        sql_execution_times.append(end_time - start_time)
+
+    # Calculate average execution time for SQL Server
+    average_time_sql = sum(sql_execution_times) / iterations
+
+    # Elasticsearch query
+    es_query = {
+        "query": {
+            "bool": {
+                "must": [
+                    {"match": {"FirstName": first_name}},
+                    {"match": {"LastName": last_name}},
+                    {"wildcard": {"PreferredName": preferred_name}}
+                ]
+            }
+        }
+    }
+
+    # Warm-up run for Elasticsearch
+    es.search(index="person_index", body=es_query)
+
+    # Record execution times for Elasticsearch
+    es_execution_times = []
+    for _ in range(iterations):
+        start_time = time.perf_counter()
+        es.search(index="person_index", body=es_query)
+        end_time = time.perf_counter()
+        es_execution_times.append(end_time - start_time)
+
+    # Calculate average execution time for Elasticsearch
+    average_time_es = sum(es_execution_times) / iterations
+
+    print(f"\033[91mAverage SQL execution time: {average_time_sql:.6f} seconds\033[0m")
+    print(f"\033[92mAverage Elasticsearch execution time: {average_time_es:.6f} seconds\033[0m")
+    performance_gain = (average_time_sql - average_time_es) / average_time_sql * 100
+    print(f"\033[93mElasticsearch performance gain: {performance_gain:.2f}%\033[0m")
 #Master Database Creation
 create_database_if_not_exists(db_name)
 
 #Setup Database and Bulk Insert Data  
-setup_database_and_bulk_insert_data(db_name, record_count=1000, batch_size=100)
+setup_database_and_bulk_insert_data(db_name, record_count=1000000, batch_size=10000)
 
 #Index Data to Elastic Search
-index_data_to_elasticsearch('PersonSearchDB', 'person_index', batch_size=1000)
+index_data_to_elasticsearch('PersonSearchDB', 'person_index', batch_size=10000)
 
 
 # Example usage of search functions
 first_name_search("FirstName", "Rahul")
-#multi_field_wildcard_search("Rahul", "Sharma", 1990)
+
+#Multi Field Wildcard Search
+multi_field_wildcard_search("Rahul", "Sharma", 1990)
+
+#Fuzzy Logic Search
 fuzzy_logic_search("Rahul")
 
+#Boolean Logic Search
 boolean_logic_search("Rahul", "Sharma", 1990)
 
+#Performance Comparison
+compare_performance("Rahul", "Sharma", "Rahul%")
+
+
+#Drop Database for Cleanup
+def drop_database(db_name):
+    execute_SQL_Query('master', f"DROP DATABASE IF EXISTS {db_name}")    
+    
+drop_database(db_name)
